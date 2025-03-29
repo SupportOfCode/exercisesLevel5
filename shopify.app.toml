@@ -1,0 +1,36 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "435b83ed21c69ac8492ca08e142ace67"
+application_url = "https://conditions-hair-consolidated-shops.trycloudflare.com"
+embedded = true
+name = "forth-app"
+handle = "forth-app-1"
+
+[build]
+include_config_on_deploy = true
+automatically_update_urls_on_dev = true
+
+[webhooks]
+api_version = "2025-01"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "write_products, read_locations, write_locations, write_inventory"
+
+[auth]
+redirect_urls = [
+  "https://conditions-hair-consolidated-shops.trycloudflare.com/auth/callback",
+  "https://conditions-hair-consolidated-shops.trycloudflare.com/auth/shopify/callback",
+  "https://conditions-hair-consolidated-shops.trycloudflare.com/api/auth/callback"
+]
+
+[pos]
+embedded = false
