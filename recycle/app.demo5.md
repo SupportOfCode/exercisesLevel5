@@ -13,6 +13,7 @@ import {
   ButtonGroup,
   Pagination,
   TextField,
+  Toast,
   Frame,
 } from "@shopify/polaris";
 import type { IndexFiltersProps } from "@shopify/polaris";
@@ -32,8 +33,8 @@ import {
   productDelete,
   getCategory,
 } from "app/utils/product.server";
+import { choiceListStatus } from "app/constants";
 import ModalCustom from "app/components/Modal";
-import { status } from "app/constants";
 
 export const loader: LoaderFunction = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
@@ -98,8 +99,10 @@ export const action: ActionFunction = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
   const formData = await request.formData();
   const ids = formData.getAll("ids") as string[];
-  await Promise.all(ids.map((id) => admin.graphql(productDelete(id))));
-  return "Deleted success";
+  const responses = await Promise.all(
+    ids.map((id) => admin.graphql(productDelete(id))),
+  );
+  return responses;
 };
 
 export default function Index() {
@@ -137,6 +140,7 @@ export default function Index() {
   const [loading, setLoading] = useState({
     acceptLoading: false,
     loadingButtonAdd: false,
+    toast: false,
   });
   // object label
   const categoryMap = Object.fromEntries(
@@ -154,7 +158,7 @@ export default function Index() {
         <ChoiceList
           title="Status"
           titleHidden
-          choices={status}
+          choices={choiceListStatus}
           selected={
             Array.isArray(filterSearch.status)
               ? filterSearch.status
@@ -352,6 +356,12 @@ export default function Index() {
       </IndexTable.Row>
     ),
   );
+  const toastMarkup = loading.toast ? (
+    <Toast
+      content="Deleted success"
+      onDismiss={() => setLoading((prev) => ({ ...prev, toast: false }))}
+    />
+  ) : null;
 
   useEffect(() => {
     const handler = setTimeout(() => {
@@ -373,83 +383,89 @@ export default function Index() {
       shopify.loading(false);
     }
 
-    if (fetcher.state === "loading") shopify.toast.show(fetcher.data as string);
+    if (fetcher.state === "loading")
+      setLoading((prev) => ({ ...prev, toast: true }));
   }, [fetcher.state, navigation.state]);
 
   return (
-    <Page
-      fullWidth
-      title="Product List"
-      primaryAction={
-        <Button
-          url="/app/product/new"
-          variant="primary"
-          loading={loading.loadingButtonAdd}
-          onClick={() => {
-            setLoading((prev) => ({
-              ...prev,
-              acceptLoading: false,
-              loadingButtonAdd: true,
-            }));
-          }}
-        >
-          New Product
-        </Button>
-      }
-    >
-      <Card padding={"0"}>
-        <IndexFilters
-          queryValue={filterSearch.title}
-          queryPlaceholder="Searching your product"
-          onQueryChange={(value) => handleFilterChange("title", value)}
-          onQueryClear={() =>
-            setFilterSearch((prev) => ({ ...prev, title: "" }))
-          }
-          tabs={[]}
-          selected={selected}
-          onSelect={setSelected}
-          filters={filters}
-          appliedFilters={appliedFilters}
-          onClearAll={handleFiltersClearAll}
-          mode={mode}
-          setMode={setMode}
-          loading={navigation.state === "loading" && loading.acceptLoading}
-        />
-        <IndexTable
-          resourceName={resourceName}
-          itemCount={products.data.length}
-          promotedBulkActions={promotedBulkActions}
-          selectedItemsCount={
-            allResourcesSelected ? "All" : selectedResources.length
-          }
-          onSelectionChange={handleSelectionChange}
-          headings={[
-            { title: "Title" },
-            { title: "Inventory" },
-            { title: "Description" },
-            { title: "Price" },
-            { title: "status" },
-            { title: "Actions" },
-          ]}
-        >
-          {rowMarkup}
-        </IndexTable>
+    <Frame>
+      <Page
+        fullWidth
+        title="Product List"
+        primaryAction={
+          <Button
+            url="/app/product/new"
+            variant="primary"
+            loading={loading.loadingButtonAdd}
+            onClick={() => {
+              setLoading((prev) => ({
+                ...prev,
+                acceptLoading: false,
+                loadingButtonAdd: true,
+              }));
+            }}
+          >
+            New Product
+          </Button>
+        }
+      >
+        <Card padding={"0"}>
+          <IndexFilters
+            queryValue={filterSearch.title}
+            queryPlaceholder="Searching your product"
+            onQueryChange={(value) => handleFilterChange("title", value)}
+            onQueryClear={() =>
+              setFilterSearch((prev) => ({ ...prev, title: "" }))
+            }
+            tabs={[]}
+            selected={selected}
+            onSelect={setSelected}
+            filters={filters}
+            appliedFilters={appliedFilters}
+            onClearAll={handleFiltersClearAll}
+            mode={mode}
+            setMode={setMode}
+            loading={navigation.state === "loading" && loading.acceptLoading}
+          />
+          <IndexTable
+            resourceName={resourceName}
+            itemCount={products.data.length}
+            promotedBulkActions={promotedBulkActions}
+            selectedItemsCount={
+              allResourcesSelected ? "All" : selectedResources.length
+            }
+            onSelectionChange={handleSelectionChange}
+            headings={[
+              { title: "Title" },
+              { title: "Inventory" },
+              { title: "Description" },
+              { title: "Price" },
+              { title: "status" },
+              { title: "Actions" },
+            ]}
+          >
+            {rowMarkup}
+          </IndexTable>
 
-        <Pagination
-          onPrevious={HandlePaginationPrev}
-          onNext={HandlePaginationNext}
-          type="table"
-          hasNext={products.pageInfo.pageHasNextAndPervious.hasNextPage}
-          hasPrevious={products.pageInfo.pageHasNextAndPervious.hasPreviousPage}
-        />
+          <Pagination
+            onPrevious={HandlePaginationPrev}
+            onNext={HandlePaginationNext}
+            type="table"
+            hasNext={products.pageInfo.pageHasNextAndPervious.hasNextPage}
+            hasPrevious={
+              products.pageInfo.pageHasNextAndPervious.hasPreviousPage
+            }
+          />
 
-        <ModalCustom
-          modalActive={modalActive}
-          handleCancle={handleCancel}
-          numberOfProduct={selectedResources.length}
-          handleDelete={handleDelete}
-        />
-      </Card>
-    </Page>
+          <ModalCustom
+            modalActive={modalActive}
+            handleCancle={handleCancel}
+            numberOfProduct={selectedResources.length}
+            handleDelete={handleDelete}
+          />
+          {toastMarkup}
+        </Card>
+      </Page>
+    </Frame>
   );
 }

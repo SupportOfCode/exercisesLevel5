@@ -21,7 +21,7 @@ export const validateData = (
     value: ProductType[Key],
   ) => void,
 ) => {
-  let newErrors = { title: "", inventory: "", price: "", categoryId: "" };
+  let newErrors = { title: "", inventory: "", price: "" };
   let isValid = true;
 
   if (!product.title && !product.title.trim()) {
@@ -29,20 +29,10 @@ export const validateData = (
     isValid = false;
   }
 
-  if (!product.categoryId && !product.categoryId.trim()) {
-    newErrors.categoryId = "You haven't choose category ";
-    isValid = false;
-  }
-
   if (+product.price < 0) {
     newErrors.price = "Price is Invalid";
     isValid = false;
   }
-
-  // if (product.inventory) {
-  //   newErrors.inventory = "Inventory is Invalid";
-  //   isValid = false;
-  // }
 
   editProduct("error", newErrors);
   return isValid;
@@ -71,4 +61,11 @@ export function useCheckNavigation() {
   }, [location.pathname]);
 
   return isFromProductNew;
+}
+
+export function formmatedCategory(item: nodeCategory) {
+  return {
+    id: item.node.id,
+    name: item.node.name,
+  };
 }

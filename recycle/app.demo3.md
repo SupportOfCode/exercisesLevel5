@@ -1,4 +1,5 @@
 import {
+  TextField,
   IndexTable,
   IndexFilters,
   useSetIndexFiltersMode,
@@ -6,16 +7,16 @@ import {
   useIndexResourceState,
   Text,
   ChoiceList,
+  RangeSlider,
   Badge,
   Page,
   Card,
   Button,
   ButtonGroup,
+  Modal,
   Pagination,
-  TextField,
-  Frame,
 } from "@shopify/polaris";
-import type { IndexFiltersProps } from "@shopify/polaris";
+import type { IndexFiltersProps, TabProps } from "@shopify/polaris";
 import { useState, useEffect } from "react";
 import { DeleteIcon, EditIcon, PlusIcon } from "@shopify/polaris-icons";
 import { ActionFunction, LoaderFunction } from "@remix-run/node";
@@ -23,17 +24,12 @@ import { authenticate } from "app/shopify.server";
 import {
   useFetcher,
   useLoaderData,
+  useNavigate,
   useNavigation,
   useSearchParams,
 } from "@remix-run/react";
-import { formmatedCategory, formmatedData } from "app/common";
-import {
-  queryProduct,
-  productDelete,
-  getCategory,
-} from "app/utils/product.server";
-import ModalCustom from "app/components/Modal";
-import { status } from "app/constants";
+import { formmatedData } from "app/common";
+import { queryProduct, queryCategories } from "app/utils/product.server";
 
 export const loader: LoaderFunction = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
@@ -44,7 +40,6 @@ export const loader: LoaderFunction = async ({ request }) => {
   const categoryParams = url.searchParams.get("category");
   const prevCursor = url.searchParams.get("prevCursor");
   const nextCursor = url.searchParams.get("nextCursor");
-  const searchCategoryParams = url.searchParams.get("searchCategory");
 
   // var query
   const queryTitle = title.trim() ? `title:*${title}* ` : "";
@@ -59,37 +54,54 @@ export const loader: LoaderFunction = async ({ request }) => {
         : "first: 5";
 
   // query data
-  const responseCategoryUpdate = await admin.graphql(
-    getCategory(searchCategoryParams ?? ""),
-  );
   const responseProducts = await admin.graphql(
     queryProduct(queryCursor, queryTitle, queryStatus, queryCategory),
   );
 
-  // convert data
-  const dataOfProduct = (await responseProducts.json()) as ProductsResponse;
-  const products = formmatedData(dataOfProduct);
-  const dataOfCategories = await responseCategoryUpdate.json();
-  const categories = dataOfCategories.data.taxonomy.categories.edges.map(
-    (item: nodeCategory) => formmatedCategory(item),
+  const responseCategory = await admin.graphql(queryCategories());
+
+  //   const responseTotalProduct = await admin.graphql(
+  //     `#graphql~
+  //      query {
+  //   productsCount(query: "id:>=1000") {
+  //     count
+  //   }
+  // }`,
+  //   );
+
+  const result = (await responseProducts.json()) as any;
+  const resultCategory = await responseCategory.json();
+  // const resultCountProduct = await responseTotalProduct.json();
+  const products = formmatedData(result);
+
+  const category = Object.values(
+    resultCategory.data.products.edges
+      .map((edge: { node: { category: { id: string; name: string } } }) => ({
+        id: edge.node.category?.id?.split("/").pop() || "",
+        name: edge.node.category?.name || "",
+      }))
+      .reduce(
+        (
+          acc: Record<string, { id: string; name: string }>,
+          item: { id: string; name: string },
+        ) => {
+          acc[item.id] = item;
+          return acc;
+        },
+        {},
+      ),
   );
 
-  // return data
   return {
     data: products,
-    category: categories,
+    // totalProduct: resultCountProduct.data.productsCount.count,
+    category: category,
     pageInfo: {
-      pageHasNextAndPervious: dataOfProduct.data.products.pageInfo,
-      cursorPointerNext: dataOfProduct.data.products.edges[
-        dataOfProduct.data.products.edges.length - 1
-      ]
-        ? dataOfProduct.data.products.edges[
-            dataOfProduct.data.products.edges.length - 1
-          ].cursor
-        : "",
-      cursorPointerPervious: dataOfProduct.data.products.edges[0]
-        ? dataOfProduct.data.products.edges[0].cursor
-        : "",
+      pageHasNextAndPervious: result.data.products.pageInfo,
+      cursorPointerNext:
+        result.data.products.edges[result.data.products.edges.length - 1]
+          .cursor,
+      cursorPointerPervious: result.data.products.edges[0].cursor,
     },
   };
 };
@@ -98,54 +110,72 @@ export const action: ActionFunction = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
   const formData = await request.formData();
   const ids = formData.getAll("ids") as string[];
-  await Promise.all(ids.map((id) => admin.graphql(productDelete(id))));
-  return "Deleted success";
+
+  const responses = await Promise.all(
+    ids.map((id) =>
+      admin.graphql(
+        `#graphql
+        mutation {
+          productDelete(input: {id: "${id}"}) {
+            deletedProductId
+            userErrors {
+              field
+              message
+            }
+          }
+        }`,
+      ),
+    ),
+  );
+
+  return responses;
 };
 
 export default function Index() {
+  // 1 loaderData and search param
   const products = useLoaderData<typeof loader>();
+  console.log("demo product: ", products.pageInfo.cursorPointerNext);
+  const [modalActive, setModalActive] = useState(false);
   const navigation = useNavigation();
   const fetcher = useFetcher();
   const [searchParams, setSearchParams] = useSearchParams();
   const params = new URLSearchParams(searchParams);
-  const { mode, setMode } = useSetIndexFiltersMode(IndexFiltersMode.Filtering);
-  const resourceName = {
-    singular: "product",
-    plural: "products",
-  };
-  const {
-    selectedResources,
-    allResourcesSelected,
-    handleSelectionChange,
-    clearSelection,
-  } = useIndexResourceState(products.data, {
-    resourceIDResolver: (data) => String(data.id),
-  });
-  const [selected, setSelected] = useState(0);
-  const [modalActive, setModalActive] = useState(false);
-  const [filterSearch, setFilterSearch] = useState<{
-    title: string;
-    status: string[];
-    category: string[];
-    searchCategory: string;
-  }>({
+  const [filterSearch, setFilterSearch] = useState({
     title: "",
-    status: [],
-    category: [],
-    searchCategory: "",
+    status: [] as string[],
+    category: [] as any[],
   });
-  const [loading, setLoading] = useState({
-    acceptLoading: false,
-    loadingButtonAdd: false,
-  });
-  // object label
+
+  // 2 object label
   const categoryMap = Object.fromEntries(
     products.category.map((cat: { id: string; name: string }) => [
       cat.id,
       cat.name,
     ]),
   );
-  // filter
+
+  // 3 set props for index filter
+  const [selected, setSelected] = useState(0);
+  const { mode, setMode } = useSetIndexFiltersMode(IndexFiltersMode.Filtering);
+
+  // 4 handle function index filter
+  function handleFilterChange<Key extends keyof FormattedProduct>(
+    key: keyof FormattedProduct,
+    value: FormattedProduct[Key],
+  ) {
+    setFilterSearch((prev) => ({ ...prev, [key]: value }));
+    setLoading((prev) => ({ ...prev, acceptLoading: true }));
+  }
+
+  const handleFiltersClearAll = () => {
+    setFilterSearch((prev) => ({
+      ...prev,
+      title: "",
+      status: [],
+      category: [],
+    }));
+  };
+
   const filters = [
     {
       key: "Status",
@@ -154,7 +184,10 @@ export default function Index() {
         <ChoiceList
           title="Status"
           titleHidden
-          choices={status}
+          choices={[
+            { label: "ACTIVE", value: "ACTIVE" },
+            { label: "DRAFT", value: "DRAFT" },
+          ]}
           selected={
             Array.isArray(filterSearch.status)
               ? filterSearch.status
@@ -169,117 +202,26 @@ export default function Index() {
       key: "Category",
       label: "Category",
       filter: (
-        <>
-          <TextField
-            label="Category"
-            value={filterSearch.searchCategory}
-            onChange={(value) => handleFilterChange("searchCategory", value)}
-            placeholder="Search category..."
-            autoComplete="off"
-            labelHidden
-          />
-          <ChoiceList
-            title="Category"
-            titleHidden
-            choices={products.category.map(
-              (item: { name: string; id: string }) => ({
-                label: item.name,
-                value: item.id,
-              }),
-            )}
-            selected={filterSearch.category}
-            onChange={(value) => handleFilterChange("category", value)}
-          />
-        </>
+        <ChoiceList
+          title="Category"
+          titleHidden
+          choices={products.category.map(
+            (item: { name: string; id: string }) => ({
+              label: item.name,
+              value: item.id,
+            }),
+          )}
+          selected={
+            Array.isArray(filterSearch.category)
+              ? filterSearch.category
+              : [filterSearch.category]
+          }
+          onChange={(value) => handleFilterChange("category", value)}
+        />
       ),
       pinned: true,
     },
   ];
-  const promotedBulkActions = [
-    {
-      destructive: true,
-      content: "Delete products",
-      onAction: () => setModalActive(true),
-    },
-  ];
-
-  // handle
-  const handleFilterChange = <Key extends keyof FormattedProduct>(
-    key: keyof FormattedProduct,
-    value: FormattedProduct[Key],
-  ) => {
-    setFilterSearch((prev) => ({ ...prev, [key]: value }));
-    setLoading((prev) => ({ ...prev, acceptLoading: true }));
-  };
-  const handleFiltersClearAll = () => {
-    setFilterSearch((prev) => ({
-      ...prev,
-      title: "",
-      status: [],
-      category: [],
-    }));
-  };
-  const handleDelete = () => {
-    if (selectedResources.length > 0) {
-      const formData = new FormData();
-      selectedResources.forEach((id) => formData.append("ids", id));
-      fetcher.submit(formData, { method: "delete" });
-      setModalActive(false);
-      clearSelection();
-    }
-  };
-  const updateParam = (key: string, value?: string) => {
-    let hasChanged = false;
-    if (value && value !== params.get(key)) {
-      params.set(key, value);
-      hasChanged = true;
-    } else if (!value && params.has(key)) {
-      params.delete(key);
-      hasChanged = true;
-    }
-    if (hasChanged) {
-      setSearchParams(params);
-    }
-  };
-  const HandlePaginationPrev = () => {
-    shopify.loading(true);
-    if (navigation.state === "loading") return;
-    params.delete("nextCursor");
-    updateParam("prevCursor", products.pageInfo.cursorPointerPervious);
-  };
-  const HandlePaginationNext = () => {
-    shopify.loading(true);
-    if (navigation.state === "loading") return;
-    params.delete("prevCursor");
-    updateParam("nextCursor", products.pageInfo.cursorPointerNext);
-  };
-  const handleCancel = () => {
-    setModalActive(false);
-    clearSelection();
-  };
-  const disambiguateLabel = (key: string, value: string | any[]): string => {
-    switch (key) {
-      case "Price":
-        return `Price is between ${value[0]}đ and ${value[1]}đ`;
-      case "Description":
-        return `Description is  ${value}`;
-      case "Status":
-        return (value as string[]).map((val) => val).join(", ");
-      case "Category":
-        return (value as string[])
-          .map((val) => categoryMap[val] || val)
-          .join(", ");
-      default:
-        return value as string;
-    }
-  };
-  const isEmpty = (value: string | any[]) => {
-    if (Array.isArray(value)) {
-      return value.length === 0;
-    } else {
-      return value === "" || value == null;
-    }
-  };
 
   // 5 applied filter
   const appliedFilters: IndexFiltersProps["appliedFilters"] = [];
@@ -301,7 +243,32 @@ export default function Index() {
     });
   }
 
-  // component
+  const resourceName = {
+    singular: "product",
+    plural: "products",
+  };
+
+  const {
+    selectedResources,
+    allResourcesSelected,
+    handleSelectionChange,
+    clearSelection,
+  } = useIndexResourceState(products.data, {
+    resourceIDResolver: (data) => String(data.id),
+  });
+
+  // 9 handle delete
+  const handleDelete = () => {
+    if (selectedResources.length > 0) {
+      const formData = new FormData();
+      selectedResources.forEach((id) => formData.append("ids", id));
+      fetcher.submit(formData, { method: "delete" });
+      setModalActive(false);
+      clearSelection();
+    }
+  };
+
+  // 6 row table
   const rowMarkup = products.data.map(
     (
       { id, title, inventory, description, price, status }: FormattedProduct,
@@ -353,18 +320,45 @@ export default function Index() {
     ),
   );
 
+  const promotedBulkActions = [
+    {
+      destructive: true,
+      content: "Delete products",
+      onAction: () => setModalActive(true),
+    },
+  ];
+
+  const updateParam = (key: string, value?: string) => {
+    let hasChanged = false;
+    if (value && value !== params.get(key)) {
+      params.set(key, value);
+      hasChanged = true;
+    } else if (!value && params.has(key)) {
+      params.delete(key);
+      hasChanged = true;
+    }
+    if (hasChanged) {
+      setSearchParams(params);
+    }
+  };
+
+  // 7 debounce
   useEffect(() => {
     const handler = setTimeout(() => {
       updateParam("title", filterSearch.title.trim());
-      updateParam("searchCategory", filterSearch.searchCategory.trim());
     }, 500);
     return () => clearTimeout(handler);
-  }, [filterSearch.title, filterSearch.searchCategory]);
+  }, [filterSearch.title, searchParams]);
 
   useEffect(() => {
     updateParam("status", filterSearch.status[0]);
-    updateParam("category", filterSearch.category[0]?.split("/").pop());
-  }, [filterSearch.status, filterSearch.category]);
+    updateParam("category", filterSearch.category[0]);
+  }, [filterSearch.status, filterSearch.category, searchParams]);
+
+  const [loading, setLoading] = useState({
+    acceptLoading: false,
+    loadingButtonAdd: false,
+  });
 
   useEffect(() => {
     if (fetcher.state !== "idle" || navigation.state === "loading") {
@@ -372,9 +366,21 @@ export default function Index() {
     } else {
       shopify.loading(false);
     }
-
-    if (fetcher.state === "loading") shopify.toast.show(fetcher.data as string);
   }, [fetcher.state, navigation.state]);
+
+  const HandlePaginationPrev = () => {
+    shopify.loading(true);
+    if (navigation.state === "loading") return;
+    params.delete("nextCursor");
+    updateParam("prevCursor", products.pageInfo.cursorPointerPervious);
+  };
+
+  const HandlePaginationNext = () => {
+    shopify.loading(true);
+    if (navigation.state === "loading") return;
+    params.delete("prevCursor");
+    updateParam("nextCursor", products.pageInfo.cursorPointerNext);
+  };
 
   return (
     <Page
@@ -382,6 +388,7 @@ export default function Index() {
       title="Product List"
       primaryAction={
         <Button
+          icon={PlusIcon}
           url="/app/product/new"
           variant="primary"
           loading={loading.loadingButtonAdd}
@@ -441,15 +448,54 @@ export default function Index() {
           type="table"
           hasNext={products.pageInfo.pageHasNextAndPervious.hasNextPage}
           hasPrevious={products.pageInfo.pageHasNextAndPervious.hasPreviousPage}
+          // label={`${paginationIndex.prev}-${paginationIndex.next} of ${products.totalProduct}`}
         />
 
-        <ModalCustom
-          modalActive={modalActive}
-          handleCancle={handleCancel}
-          numberOfProduct={selectedResources.length}
-          handleDelete={handleDelete}
-        />
+        {/* Modal */}
+        <Modal
+          open={modalActive}
+          onClose={() => setModalActive(false)}
+          title={`Are you sure you want to delete ${selectedResources.length} products?`}
+          primaryAction={{
+            content: "Delete",
+            destructive: true,
+            onAction: handleDelete,
+          }}
+          secondaryActions={[
+            { content: "Cancel", onAction: () => setModalActive(false) },
+          ]}
+        >
+          <Modal.Section>
+            <p>This action cannot be undone.</p>
+          </Modal.Section>
+        </Modal>
       </Card>
     </Page>
   );
+
+  // 8 handle utils
+  function disambiguateLabel(key: string, value: string | any[]): string {
+    switch (key) {
+      case "Price":
+        return `Price is between ${value[0]}đ and ${value[1]}đ`;
+      case "Description":
+        return `Description is  ${value}`;
+      case "Status":
+        return (value as string[]).map((val) => val).join(", ");
+      case "Category":
+        return (value as string[])
+          .map((val) => categoryMap[val] || val)
+          .join(", ");
+      default:
+        return value as string;
+    }
+  }
+
+  function isEmpty(value: string | any[]) {
+    if (Array.isArray(value)) {
+      return value.length === 0;
+    } else {
+      return value === "" || value == null;
+    }
+  }
 }

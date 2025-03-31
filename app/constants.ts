@@ -1,6 +1,6 @@
 export const status = [
-  { label: "ACTIVE", value: "ACTIVE" },
-  { label: "DRAFT", value: "DRAFT" },
+  { label: "Active", value: "ACTIVE" },
+  { label: "Draft", value: "DRAFT" },
 ];
 
 export const productInit: ProductType = {
@@ -10,12 +10,13 @@ export const productInit: ProductType = {
   price: "0",
   inventory: "0",
   categoryId: "",
+  categoryName: "",
   variantId: "",
   inventoryItemId: "",
+  categorySearch: "",
   error: {
     title: "",
     inventory: "",
     price: "",
-    categoryId: "",
   },
 };

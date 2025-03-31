@@ -25,7 +25,6 @@ export default function App() {
           Home
         </Link>
         <Link to="/app/product/new">Product page</Link>
-        <Link to="/app/demo">demo</Link>
       </NavMenu>
       <Outlet />
     </AppProvider>

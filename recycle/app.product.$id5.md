@@ -129,11 +129,7 @@ export const action: ActionFunction = async ({ request, params }) => {
         ],
       },
     });
-    // return redirect(`/app/product/${argOfProduct.idProduct.split("/").pop()}`);
-    return {
-      id: argOfProduct.idProduct.split("/").pop(),
-      title: "created success",
-    };
+    return redirect(`/app/product/${argOfProduct.idProduct.split("/").pop()}`);
   } else if (request.method === "PUT") {
     await Promise.all([
       admin.graphql(UpdateProduct(), {
@@ -176,9 +172,7 @@ export const action: ActionFunction = async ({ request, params }) => {
         },
       }),
     ]);
-    return {
-      title: "update successed",
-    };
+    return redirect("/app");
   } else if (request.method === "DELETE") {
     await admin.graphql(productDelete(`gid://shopify/Product/${params.id}`));
     return redirect("/app");
@@ -193,26 +187,27 @@ export default function Product() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigation = useNavigation();
   // custom hook
-  const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
+  const banner = useCheckNavigation();
   const [modalActive, setModalActive] = useState(false);
   const [loadingButton, setLoaddingButton] = useState({
     submitLoading: false,
     deleteLoading: false,
+    // showBanner: true,
+    showToast: false,
+    contentToast: "",
   });
-
-  useEffect(() => {
-    if ((fetcher.data as { title: string })?.title === "update success")
-      navigate("/app");
-    if ((fetcher.data as { title: string })?.title === "created success")
-      navigate(`/app/product/${(fetcher.data as { id: string })?.id}`);
-  }, [fetcher.data]);
 
   useEffect(() => {
     if (fetcher.state === "idle" || navigation.state !== "loading")
       shopify.loading(false);
+
     if (fetcher.state === "loading")
-      shopify.toast.show((fetcher.data as { title: string })?.title);
+      setLoaddingButton((prev) => ({ ...prev, showToast: true }));
   }, [fetcher.state, navigation.state]);
+
+  useEffect(() => {
+    setLoaddingButton((prev) => ({ ...prev, showBanner: banner }));
+  }, [banner]);
 
   useEffect(() => {
     const defaultValueCategory = !product.categoryId.trim()
@@ -253,6 +248,9 @@ export default function Product() {
     return () => clearTimeout(handler);
   }, [product.categoryName, searchParams]);
 
+  console.log("productOld", productOld.data);
+  console.log("product", product);
+
   const handleChange =
     <Key extends keyof ProductType>(field: Key) =>
     (value: ProductType[Key] | any) => {
@@ -273,6 +271,7 @@ export default function Product() {
       variant: product.variantId,
       inventoryId: product.inventoryItemId,
     };
+    setLoaddingButton((prev) => ({ ...prev, contentToast: "saved success" }));
     formData.append("data", JSON.stringify(data));
     fetcher.submit(formData, {
       method: productOld.page === "new" ? "post" : "put",
@@ -286,14 +285,21 @@ export default function Product() {
     setModalActive(false);
   };
 
-  // const toastMarkup = loadingButton.showToast ? (
-  //   <Toast
-  //     content={loadingButton.contentToast}
-  //     onDismiss={() =>
-  //       setLoaddingButton((prev) => ({ ...prev, showToast: false }))
-  //     }
-  //   />
-  // ) : null;
+  const toastMarkup = loadingButton.showToast ? (
+    <Toast
+      content={loadingButton.contentToast}
+      onDismiss={() =>
+        setLoaddingButton((prev) => ({ ...prev, showToast: false }))
+      }
+    />
+  ) : null;
+
+  // \//////////////////////////////
+
+  const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
+  // const [inputValue, setInputValue] = useState("");
+
+  // const updateText = (value: string) => setInputValue(value);
 
   const updateSelection = (selected: string[]) => {
     const selectedValue = selected.map((selectedItem) => {
@@ -307,8 +313,14 @@ export default function Product() {
 
     setSelectedOptions(selected);
     editProduct("categoryId", selected[0]);
+    // setInputValue(selectedValue[0] || "");
     editProduct("categoryName", selectedValue[0]);
+    // console.log(selectedValue[0]);
+    // console.log("1", product.categoryId);
+    // console.log("1", product.categoryName);
   };
+
+  console.log(product.categoryName);
 
   const textField = (
     <Autocomplete.TextField
@@ -323,115 +335,162 @@ export default function Product() {
   );
 
   return (
-    <Page
-      title={productOld.page === "new" ? "Add Product" : product.title}
-      backAction={{
-        onAction: () => {
-          shopify.loading(true);
-          navigate("/app");
-        },
-      }}
-      primaryAction={
-        <Button
-          loading={fetcher.state !== "idle" && loadingButton.submitLoading}
-          variant="primary"
-          onClick={() => {
-            handleSubmit();
-            setLoaddingButton((prev) => ({ ...prev, submitLoading: true }));
-          }}
-        >
-          Save
-        </Button>
-      }
-      secondaryActions={
-        productOld.page === "edit" ? (
+    <Frame>
+      <Page
+        title={productOld.page === "new" ? "Add Product" : product.title}
+        backAction={{
+          onAction: () => {
+            shopify.loading(true);
+            navigate("/app");
+          },
+        }}
+        primaryAction={
           <Button
-            loading={fetcher.state !== "idle" && loadingButton.deleteLoading}
-            variant="secondary"
-            tone="critical"
+            loading={fetcher.state !== "idle" && loadingButton.submitLoading}
+            variant="primary"
             onClick={() => {
-              setLoaddingButton((prev) => ({ ...prev, deleteLoading: true }));
-              setModalActive(true);
+              handleSubmit();
+              setLoaddingButton((prev) => ({ ...prev, submitLoading: true }));
             }}
           >
-            Delete
+            Save
           </Button>
-        ) : (
-          []
-        )
-      }
-    >
-      <Card background="bg-surface" padding="600">
-        <FormLayout>
-          <FormLayout.Group>
-            <TextField
-              label="Title"
-              autoComplete="off"
-              requiredIndicator
-              name="title"
-              error={product.error.title}
-              value={product.title}
-              onChange={handleChange("title")}
+        }
+        secondaryActions={
+          productOld.page === "edit" ? (
+            <Button
+              loading={fetcher.state !== "idle" && loadingButton.deleteLoading}
+              variant="secondary"
+              tone="critical"
+              onClick={() => {
+                setLoaddingButton((prev) => ({ ...prev, deleteLoading: true }));
+                setModalActive(true);
+              }}
+            >
+              Delete
+            </Button>
+          ) : (
+            []
+          )
+        }
+      >
+        {/* <Box paddingBlock={"100"}>
+          {loadingButton.showBanner && productOld.page === "edit" && (
+            <Banner
+              title={`Added ${product.title}`}
+              tone="success"
+              action={{
+                content: "back home page to see",
+                onAction: () => {
+                  shopify.loading(true);
+                  navigate("/app/demo");
+                },
+              }}
+              onDismiss={() =>
+                setLoaddingButton((prev) => ({ ...prev, showBanner: false }))
+              }
             />
-            <Select
-              onChange={handleChange("status")}
-              value={product.status}
-              label="Status"
-              options={status}
-              name="status"
-            />
-            <TextField
-              type="number"
-              label="Price"
-              name="price"
-              autoComplete="off"
-              suffix="đ"
-              requiredIndicator
-              value={product.price}
-              onChange={handleChange("price")}
-              error={product.error.price}
-              maxLength={20}
-            />
-          </FormLayout.Group>
+          )}
+        </Box> */}
+        <Card background="bg-surface" padding="600">
+          <FormLayout>
+            <FormLayout.Group>
+              <TextField
+                label="Title"
+                autoComplete="off"
+                requiredIndicator
+                name="title"
+                error={product.error.title}
+                value={product.title}
+                onChange={handleChange("title")}
+              />
+              <Select
+                onChange={handleChange("status")}
+                value={product.status}
+                label="Status"
+                options={status}
+                name="status"
+              />
+              <TextField
+                type="number"
+                label="Price"
+                name="price"
+                autoComplete="off"
+                suffix="đ"
+                requiredIndicator
+                value={product.price}
+                onChange={handleChange("price")}
+                error={product.error.price}
+                maxLength={20}
+              />
+            </FormLayout.Group>
 
-          <TextField
-            label="Description"
-            name="description"
-            multiline={4}
-            autoComplete="off"
-            value={product.description}
-            onChange={handleChange("description")}
-          />
-          <FormLayout.Group>
             <TextField
-              type="number"
-              label="Stock"
-              name="stock"
+              label="Description"
+              name="description"
+              multiline={4}
               autoComplete="off"
-              maxLength={20}
-              onChange={handleChange("inventory")}
-              value={product.inventory}
-              requiredIndicator
-              error={product.error.inventory}
+              value={product.description}
+              onChange={handleChange("description")}
             />
-            <Autocomplete
-              options={productOld.category}
-              selected={selectedOptions}
-              onSelect={updateSelection}
-              textField={textField}
-            />
-          </FormLayout.Group>
-        </FormLayout>
-        {/* {toastMarkup} */}
-        <ModalCustom
-          modalActive={modalActive}
-          handleCancle={() => {
-            setModalActive(false);
-          }}
-          numberOfProduct={1}
-          handleDelete={handleDelete}
-        />
-      </Card>
-    </Page>
+            <FormLayout.Group>
+              <TextField
+                type="number"
+                label="Stock"
+                name="stock"
+                autoComplete="off"
+                maxLength={20}
+                onChange={handleChange("inventory")}
+                value={product.inventory}
+                requiredIndicator
+                error={product.error.inventory}
+              />
+              {/* <Box> */}
+              {/* <TextField
+                  label="Category"
+                  placeholder="Category search ..."
+                  autoComplete="off"
+                  value={product.categorySearch}
+                  requiredIndicator
+                  onChange={handleChange("categorySearch")}
+                /> */}
+              {/* <Box padding={"100"} />
+                <Select
+                  onChange={handleChange("categoryId")}
+                  value={product.categoryId}
+                  name="category"
+                  label=""
+                  options={
+                    !product.categorySearch.trim()
+                      ? [
+                          {
+                            value: productOld.data.categoryId,
+                            label: productOld.data.categoryName,
+                          },
+                        ]
+                      : productOld.category
+                  }
+                /> */}
+              {/* </Box> */}
+              <Autocomplete
+                options={productOld.category}
+                selected={selectedOptions}
+                onSelect={updateSelection}
+                textField={textField}
+              />
+            </FormLayout.Group>
+          </FormLayout>
+          {toastMarkup}
+          <ModalCustom
+            modalActive={modalActive}
+            handleCancle={() => {
+              setModalActive(false);
+            }}
+            numberOfProduct={1}
+            handleDelete={handleDelete}
+          />
+        </Card>
+      </Page>
+    </Frame>
   );
 }

@@ -2,6 +2,7 @@ import { ActionFunction, LoaderFunction, redirect } from "@remix-run/node";
 import {
   useFetcher,
   useLoaderData,
+  useLocation,
   useNavigate,
   useNavigation,
   useSearchParams,
@@ -15,55 +16,78 @@ import {
   FormLayout,
   Banner,
   Box,
-  Toast,
-  Frame,
-  Autocomplete,
-  Icon,
 } from "@shopify/polaris";
-import { SearchIcon } from "@shopify/polaris-icons";
+import { DeleteIcon, SendIcon } from "@shopify/polaris-icons";
 import { useCheckNavigation, validateData } from "app/common";
-import ModalCustom from "app/components/Modal";
 import { productInit, status } from "app/constants";
 import { authenticate } from "app/shopify.server";
 import { useProductStore } from "app/store";
-import {
-  createProduct,
-  getCategory,
-  getProduct,
-  inventoryAdjustQuantities,
-  productDelete,
-  productVariantsBulkUpdate,
-  ProductVariantsCreate,
-  UpdateProduct,
-} from "app/utils/product.server";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 export const loader: LoaderFunction = async ({ request, params }) => {
   const { admin } = await authenticate.admin(request);
   const url = new URL(request.url);
-  const categorySearch = url.searchParams.get("categorySearch");
-
-  // query data
-  const responseCategory = await admin.graphql(
-    getCategory(categorySearch ?? ""),
+  const title = url.searchParams.get("title");
+  const response = await admin.graphql(
+    `#graphql
+    query {
+  taxonomy {
+    categories(first: 3, search:"${title}") {
+      edges {
+        node {
+          name
+          id
+        }
+      }
+    }
+  }
+}`,
   );
-  const responseProduct = await admin.graphql(getProduct(), {
-    variables: {
-      ownerId: `gid://shopify/Product/${params.id}`,
-    },
-  });
 
-  // convert data
-  const dataCategory = await responseCategory.json();
+  const responseProduct = await admin.graphql(
+    `#graphql
+    query ProductMetafield( $ownerId: ID!) {
+  product(id: $ownerId) {
+    title,
+    description,
+    status,
+    category {
+          id
+      }
+    options{
+      id,
+      name
+    }
+    variants(first: 1) {
+      edges {
+        node {
+          id
+          price
+          inventoryQuantity
+          inventoryItem {
+            id
+          }
+        }
+      }
+    }
+  }
+}`,
+    {
+      variables: {
+        ownerId: `gid://shopify/Product/${params.id}`,
+      },
+    },
+  );
+
+  const data = await response.json();
   const dataOfProduct = await responseProduct.json();
-  const categoryList = dataCategory.data.taxonomy.categories.edges.map(
+  const categoryList = data.data.taxonomy.categories.edges.map(
     (item: { node: { id: string; name: string } }) => ({
       value: item.node.id,
       label: item.node.name,
     }),
   );
 
-  // return data
   if (params.id === "new")
     return {
       data: productInit,
@@ -80,7 +104,6 @@ export const loader: LoaderFunction = async ({ request, params }) => {
       inventory:
         dataOfProduct.data.product?.variants.edges[0].node.inventoryQuantity.toString(),
       categoryId: dataOfProduct.data.product?.category.id,
-      categoryName: dataOfProduct.data.product.category.name,
       variantId: dataOfProduct.data.product?.variants.edges[0].node.id,
       inventoryItemId:
         dataOfProduct.data.product.variants.edges[0].node.inventoryItem.id,
@@ -94,15 +117,26 @@ export const action: ActionFunction = async ({ request, params }) => {
   const { admin } = await authenticate.admin(request);
   const formData = await request.formData();
   const data = JSON.parse(formData.get("data") as string);
-  const paramCategory = data
-    ? !data.category.trim()
-      ? "gid://shopify/TaxonomyCategory/na"
-      : data.category
-    : "";
 
   if (request.method === "POST") {
     const responseProduct = await admin.graphql(
-      createProduct(data.title, data.description, data.status, paramCategory),
+      `#graphql
+        mutation {
+    productCreate(product: {title: "${data.title}", descriptionHtml: "${data.description}", status: ${data.status}, category:"${data.category}"}) {
+      product {
+        id
+        options {
+        id
+        name
+      }
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+        `,
     );
     const dataOfProduct = await responseProduct.json();
     const argOfProduct = {
@@ -111,32 +145,51 @@ export const action: ActionFunction = async ({ request, params }) => {
       nameOption: dataOfProduct.data.productCreate.product.options[0].name,
     };
 
-    await admin.graphql(ProductVariantsCreate(), {
-      variables: {
-        productId: argOfProduct.idProduct,
-        variants: [
-          {
-            inventoryQuantities: {
-              locationId: "gid://shopify/Location/104149254454",
-              availableQuantity: +data.inventory,
+    await admin.graphql(
+      `#graphql
+     mutation ProductVariantsCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+      productVariantsBulkCreate(productId: $productId, variants: $variants) {
+        userErrors {
+          field
+          message
+        }
+      }
+    }`,
+      {
+        variables: {
+          productId: argOfProduct.idProduct,
+          variants: [
+            {
+              inventoryQuantities: {
+                locationId: "gid://shopify/Location/104149254454",
+                availableQuantity: +data.inventory,
+              },
+              price: +data.price,
+              optionValues: {
+                optionId: argOfProduct.idOption,
+                name: argOfProduct.nameOption,
+              },
             },
-            price: +data.price,
-            optionValues: {
-              optionId: argOfProduct.idOption,
-              name: argOfProduct.nameOption,
-            },
-          },
-        ],
+          ],
+        },
       },
-    });
-    // return redirect(`/app/product/${argOfProduct.idProduct.split("/").pop()}`);
-    return {
-      id: argOfProduct.idProduct.split("/").pop(),
-      title: "created success",
-    };
+    );
+    return redirect(`/app/product/${argOfProduct.idProduct.split("/").pop()}`);
   } else if (request.method === "PUT") {
-    await Promise.all([
-      admin.graphql(UpdateProduct(), {
+    const { admin } = await authenticate.admin(request);
+
+    await admin.graphql(
+      `#graphql
+        mutation UpdateProduct($input: ProductInput!) {
+        productUpdate(input: $input) {
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+      `,
+      {
         variables: {
           input: {
             id: `gid://shopify/Product/${params.id}`,
@@ -146,9 +199,23 @@ export const action: ActionFunction = async ({ request, params }) => {
             category: data.category,
           },
         },
-      }),
+      },
+    );
 
-      admin.graphql(productVariantsBulkUpdate(), {
+    await admin.graphql(
+      `#graphql
+          mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+            product {
+              id
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }`,
+      {
         variables: {
           productId: `gid://shopify/Product/${params.id}`,
           variants: [
@@ -158,9 +225,20 @@ export const action: ActionFunction = async ({ request, params }) => {
             },
           ],
         },
-      }),
+      },
+    );
 
-      admin.graphql(inventoryAdjustQuantities(), {
+    await admin.graphql(
+      `#graphql
+        mutation inventoryAdjustQuantities($input: InventoryAdjustQuantitiesInput!) {
+          inventoryAdjustQuantities(input: $input) {
+            userErrors {
+              field
+              message
+            }
+          }
+        }`,
+      {
         variables: {
           input: {
             reason: "correction",
@@ -174,51 +252,40 @@ export const action: ActionFunction = async ({ request, params }) => {
             ],
           },
         },
-      }),
-    ]);
-    return {
-      title: "update successed",
-    };
-  } else if (request.method === "DELETE") {
-    await admin.graphql(productDelete(`gid://shopify/Product/${params.id}`));
-    return redirect("/app");
+      },
+    );
+
+    return redirect("/app/demo");
   }
 };
 
 export default function Product() {
+  const banner = useCheckNavigation();
   const fetcher = useFetcher();
   const productOld = useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const { product, setProduct, editProduct, resetProduct } = useProductStore();
   const [searchParams, setSearchParams] = useSearchParams();
-  const navigation = useNavigation();
-  // custom hook
-  const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
-  const [modalActive, setModalActive] = useState(false);
   const [loadingButton, setLoaddingButton] = useState({
     submitLoading: false,
     deleteLoading: false,
+    showBanner: true,
   });
-
-  useEffect(() => {
-    if ((fetcher.data as { title: string })?.title === "update success")
-      navigate("/app");
-    if ((fetcher.data as { title: string })?.title === "created success")
-      navigate(`/app/product/${(fetcher.data as { id: string })?.id}`);
-  }, [fetcher.data]);
+  const navigation = useNavigation();
 
   useEffect(() => {
     if (fetcher.state === "idle" || navigation.state !== "loading")
       shopify.loading(false);
-    if (fetcher.state === "loading")
-      shopify.toast.show((fetcher.data as { title: string })?.title);
   }, [fetcher.state, navigation.state]);
+
+  useEffect(() => {
+    setLoaddingButton((prev) => ({ ...prev, showBanner: banner }));
+  }, [banner]);
 
   useEffect(() => {
     const defaultValueCategory = !product.categoryId.trim()
       ? (productOld.category[0]?.value ?? "")
       : product.categoryId;
-
     editProduct("categoryId", defaultValueCategory);
   }, [productOld.category]);
 
@@ -244,14 +311,14 @@ export default function Product() {
           hasChanged = true;
         }
       };
-      updateParam("categorySearch", product.categoryName.trim() || undefined);
+      updateParam("title", product.title.trim() || undefined);
       if (hasChanged) {
         setSearchParams(params);
       }
     }, 500);
 
     return () => clearTimeout(handler);
-  }, [product.categoryName, searchParams]);
+  }, [product.title, searchParams]);
 
   const handleChange =
     <Key extends keyof ProductType>(field: Key) =>
@@ -279,61 +346,20 @@ export default function Product() {
     });
   };
 
-  const handleDelete = () => {
-    const formData = new FormData();
-    setLoaddingButton((prev) => ({ ...prev, contentToast: "deleted success" }));
-    fetcher.submit(formData, { method: "delete" });
-    setModalActive(false);
-  };
-
-  // const toastMarkup = loadingButton.showToast ? (
-  //   <Toast
-  //     content={loadingButton.contentToast}
-  //     onDismiss={() =>
-  //       setLoaddingButton((prev) => ({ ...prev, showToast: false }))
-  //     }
-  //   />
-  // ) : null;
-
-  const updateSelection = (selected: string[]) => {
-    const selectedValue = selected.map((selectedItem) => {
-      const matchedOption = productOld.category.find(
-        (option: { value: string; label: string }) => {
-          return option.value.match(selectedItem);
-        },
-      );
-      return matchedOption && matchedOption.label;
-    });
-
-    setSelectedOptions(selected);
-    editProduct("categoryId", selected[0]);
-    editProduct("categoryName", selectedValue[0]);
-  };
-
-  const textField = (
-    <Autocomplete.TextField
-      onChange={handleChange("categoryName")}
-      label="Category"
-      requiredIndicator
-      value={product.categoryName}
-      prefix={<Icon source={SearchIcon} tone="base" />}
-      placeholder="Search category ..."
-      autoComplete="off"
-    />
-  );
-
   return (
     <Page
       title={productOld.page === "new" ? "Add Product" : product.title}
+      fullWidth
       backAction={{
         onAction: () => {
           shopify.loading(true);
-          navigate("/app");
+          navigate("/app/demo");
         },
       }}
       primaryAction={
         <Button
           loading={fetcher.state !== "idle" && loadingButton.submitLoading}
+          icon={SendIcon}
           variant="primary"
           onClick={() => {
             handleSubmit();
@@ -344,23 +370,37 @@ export default function Product() {
         </Button>
       }
       secondaryActions={
-        productOld.page === "edit" ? (
-          <Button
-            loading={fetcher.state !== "idle" && loadingButton.deleteLoading}
-            variant="secondary"
-            tone="critical"
-            onClick={() => {
-              setLoaddingButton((prev) => ({ ...prev, deleteLoading: true }));
-              setModalActive(true);
-            }}
-          >
-            Delete
-          </Button>
-        ) : (
-          []
-        )
+        <Button
+          loading={fetcher.state !== "idle" && loadingButton.deleteLoading}
+          icon={DeleteIcon}
+          variant="secondary"
+          tone="critical"
+          onClick={() => {
+            setLoaddingButton((prev) => ({ ...prev, deleteLoading: true }));
+          }}
+        >
+          Delete
+        </Button>
       }
     >
+      <Box paddingBlock={"400"}>
+        {loadingButton.showBanner && productOld.page === "edit" && (
+          <Banner
+            title={`Added ${product.title}`}
+            tone="success"
+            action={{
+              content: "back home page to see",
+              onAction: () => {
+                shopify.loading(true);
+                navigate("/app/demo");
+              },
+            }}
+            onDismiss={() =>
+              setLoaddingButton((prev) => ({ ...prev, showBanner: false }))
+            }
+          />
+        )}
+      </Box>
       <Card background="bg-surface" padding="600">
         <FormLayout>
           <FormLayout.Group>
@@ -414,23 +454,17 @@ export default function Product() {
               requiredIndicator
               error={product.error.inventory}
             />
-            <Autocomplete
+            <Select
+              onChange={handleChange("categoryId")}
+              value={product.categoryId}
+              name="Category"
+              requiredIndicator
+              label="category"
               options={productOld.category}
-              selected={selectedOptions}
-              onSelect={updateSelection}
-              textField={textField}
+              error={product.error.categoryId}
             />
           </FormLayout.Group>
         </FormLayout>
-        {/* {toastMarkup} */}
-        <ModalCustom
-          modalActive={modalActive}
-          handleCancle={() => {
-            setModalActive(false);
-          }}
-          numberOfProduct={1}
-          handleDelete={handleDelete}
-        />
       </Card>
     </Page>
   );
