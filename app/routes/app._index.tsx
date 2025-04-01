@@ -11,13 +11,11 @@ import {
   Card,
   Button,
   ButtonGroup,
-  Pagination,
   TextField,
-  Frame,
 } from "@shopify/polaris";
 import type { IndexFiltersProps } from "@shopify/polaris";
 import { useState, useEffect } from "react";
-import { DeleteIcon, EditIcon, PlusIcon } from "@shopify/polaris-icons";
+import { DeleteIcon, EditIcon } from "@shopify/polaris-icons";
 import { ActionFunction, LoaderFunction } from "@remix-run/node";
 import { authenticate } from "app/shopify.server";
 import {
@@ -26,7 +24,11 @@ import {
   useNavigation,
   useSearchParams,
 } from "@remix-run/react";
-import { formmatedCategory, formmatedData } from "app/common";
+import {
+  capitalize,
+  formmatedCategoriesByLabel,
+  formmatedData,
+} from "app/common";
 import {
   queryProduct,
   productDelete,
@@ -34,6 +36,8 @@ import {
 } from "app/utils/product.server";
 import ModalCustom from "app/components/Modal";
 import { status } from "app/constants";
+import { useUpdateParams } from "app/hooks/useUpdateParams";
+import { useDebounce } from "app/hooks/useDebounce";
 
 export const loader: LoaderFunction = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
@@ -59,38 +63,28 @@ export const loader: LoaderFunction = async ({ request }) => {
         : "first: 5";
 
   // query data
-  const responseCategoryUpdate = await admin.graphql(
-    getCategory(searchCategoryParams ?? ""),
-  );
-  const responseProducts = await admin.graphql(
-    queryProduct(queryCursor, queryTitle, queryStatus, queryCategory),
-  );
+  const [responseCategoryUpdate, responseProducts] = await Promise.all([
+    admin.graphql(getCategory(searchCategoryParams ?? "")),
+    admin.graphql(
+      queryProduct(queryCursor, queryTitle, queryStatus, queryCategory),
+    ),
+  ]);
 
   // convert data
-  const dataOfProduct = (await responseProducts.json()) as ProductsResponse;
-  const products = formmatedData(dataOfProduct);
-  const dataOfCategories = await responseCategoryUpdate.json();
+  const [dataOfProduct, dataOfCategories] = await Promise.all([
+    responseProducts.json(),
+    responseCategoryUpdate.json(),
+  ]);
+  const products = formmatedData(dataOfProduct as ProductsResponse);
   const categories = dataOfCategories.data.taxonomy.categories.edges.map(
-    (item: nodeCategory) => formmatedCategory(item),
+    (item: nodeCategory) => formmatedCategoriesByLabel(item),
   );
 
   // return data
   return {
     data: products,
     category: categories,
-    pageInfo: {
-      pageHasNextAndPervious: dataOfProduct.data.products.pageInfo,
-      cursorPointerNext: dataOfProduct.data.products.edges[
-        dataOfProduct.data.products.edges.length - 1
-      ]
-        ? dataOfProduct.data.products.edges[
-            dataOfProduct.data.products.edges.length - 1
-          ].cursor
-        : "",
-      cursorPointerPervious: dataOfProduct.data.products.edges[0]
-        ? dataOfProduct.data.products.edges[0].cursor
-        : "",
-    },
+    pageInfo: dataOfProduct.data.products.pageInfo,
   };
 };
 
@@ -106,8 +100,8 @@ export default function Index() {
   const products = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const fetcher = useFetcher();
+  const updateParam = useUpdateParams();
   const [searchParams, setSearchParams] = useSearchParams();
-  const params = new URLSearchParams(searchParams);
   const { mode, setMode } = useSetIndexFiltersMode(IndexFiltersMode.Filtering);
   const resourceName = {
     singular: "product",
@@ -121,7 +115,6 @@ export default function Index() {
   } = useIndexResourceState(products.data, {
     resourceIDResolver: (data) => String(data.id),
   });
-  const [selected, setSelected] = useState(0);
   const [modalActive, setModalActive] = useState(false);
   const [filterSearch, setFilterSearch] = useState<{
     title: string;
@@ -140,9 +133,9 @@ export default function Index() {
   });
   // object label
   const categoryMap = Object.fromEntries(
-    products.category.map((cat: { id: string; name: string }) => [
-      cat.id,
-      cat.name,
+    products.category.map((cat: { value: string; label: string }) => [
+      cat.value,
+      cat.label,
     ]),
   );
   // filter
@@ -155,11 +148,7 @@ export default function Index() {
           title="Status"
           titleHidden
           choices={status}
-          selected={
-            Array.isArray(filterSearch.status)
-              ? filterSearch.status
-              : [filterSearch.status]
-          }
+          selected={filterSearch.status}
           onChange={(value) => handleFilterChange("status", value)}
         />
       ),
@@ -181,12 +170,7 @@ export default function Index() {
           <ChoiceList
             title="Category"
             titleHidden
-            choices={products.category.map(
-              (item: { name: string; id: string }) => ({
-                label: item.name,
-                value: item.id,
-              }),
-            )}
+            choices={products.category}
             selected={filterSearch.category}
             onChange={(value) => handleFilterChange("category", value)}
           />
@@ -228,36 +212,27 @@ export default function Index() {
       clearSelection();
     }
   };
-  const updateParam = (key: string, value?: string) => {
-    let hasChanged = false;
-    if (value && value !== params.get(key)) {
-      params.set(key, value);
-      hasChanged = true;
-    } else if (!value && params.has(key)) {
-      params.delete(key);
-      hasChanged = true;
-    }
-    if (hasChanged) {
-      setSearchParams(params);
-    }
-  };
   const HandlePaginationPrev = () => {
+    const params = new URLSearchParams(searchParams);
     shopify.loading(true);
     if (navigation.state === "loading") return;
     params.delete("nextCursor");
-    updateParam("prevCursor", products.pageInfo.cursorPointerPervious);
+    params.set("prevCursor", products.pageInfo.startCursor);
+    setSearchParams(params);
   };
   const HandlePaginationNext = () => {
+    const params = new URLSearchParams(searchParams);
     shopify.loading(true);
     if (navigation.state === "loading") return;
     params.delete("prevCursor");
-    updateParam("nextCursor", products.pageInfo.cursorPointerNext);
+    params.set("nextCursor", products.pageInfo.endCursor);
+    setSearchParams(params);
   };
   const handleCancel = () => {
     setModalActive(false);
     clearSelection();
   };
-  const disambiguateLabel = (key: string, value: string | any[]): string => {
+  const disambiguateLabel = (key: string, value: string | string[]): string => {
     switch (key) {
       case "Price":
         return `Price is between ${value[0]}đ and ${value[1]}đ`;
@@ -273,15 +248,14 @@ export default function Index() {
         return value as string;
     }
   };
-  const isEmpty = (value: string | any[]) => {
+  const isEmpty = (value: string | string[]) => {
     if (Array.isArray(value)) {
       return value.length === 0;
     } else {
       return value === "" || value == null;
     }
   };
-
-  // 5 applied filter
+  //  applied filter
   const appliedFilters: IndexFiltersProps["appliedFilters"] = [];
   if (filterSearch.status && !isEmpty(filterSearch.status)) {
     const key = "Status";
@@ -291,7 +265,6 @@ export default function Index() {
       onRemove: () => setFilterSearch((prev) => ({ ...prev, status: [] })),
     });
   }
-
   if (filterSearch.category && !isEmpty(filterSearch.category)) {
     const key = "Category";
     appliedFilters.push({
@@ -306,65 +279,73 @@ export default function Index() {
     (
       { id, title, inventory, description, price, status }: FormattedProduct,
       index: number,
-    ) => (
-      <IndexTable.Row
-        id={id}
-        key={id}
-        selected={selectedResources.includes(id)}
-        position={index}
-      >
-        <IndexTable.Cell>
-          <Text variant="bodyMd" fontWeight="bold" as="span">
-            {title}
-          </Text>
-        </IndexTable.Cell>
-        <IndexTable.Cell>
-          <Text as="span" tone={+inventory > 0 ? "base" : "critical"} numeric>
-            {+inventory > 0 ? inventory + " In Stock" : "Out of Stock"}
-          </Text>
-        </IndexTable.Cell>
-        <IndexTable.Cell>{description}</IndexTable.Cell>
-        <IndexTable.Cell>
-          <Text as="span" numeric>
-            {price} đ
-          </Text>
-        </IndexTable.Cell>
-        <IndexTable.Cell>
-          <Badge tone={status === "ACTIVE" ? "success" : "info"}>
-            {Array.isArray(status) ? status.join(", ") : status}
-          </Badge>
-        </IndexTable.Cell>
-        <IndexTable.Cell>
-          <ButtonGroup>
-            <Button
-              tone="success"
-              url={`/app/product/${id.split("/").pop()}`}
-              icon={EditIcon}
-              onClick={() => shopify.loading(true)}
-            />
-            <Button
-              tone="critical"
-              icon={DeleteIcon}
-              onClick={() => setModalActive(true)}
-            />
-          </ButtonGroup>
-        </IndexTable.Cell>
-      </IndexTable.Row>
-    ),
+    ) => {
+      const formattedInventory =
+        +inventory > 0 ? `${inventory} In Stock` : "Out of Stock";
+      const fomattedInventoryTone = +inventory > 0 ? "base" : "critical";
+      const fomattedStatus = capitalize(status);
+      const fomattedStatusTone = status === "ACTIVE" ? "success" : "info";
+      const paramId = id.split("/").pop();
+
+      return (
+        <IndexTable.Row
+          id={id}
+          key={id}
+          selected={selectedResources.includes(id)}
+          position={index}
+        >
+          <IndexTable.Cell>
+            <Text variant="bodyMd" fontWeight="bold" as="span">
+              {title}
+            </Text>
+          </IndexTable.Cell>
+          <IndexTable.Cell>
+            <Text as="span" tone={fomattedInventoryTone} numeric>
+              {formattedInventory}
+            </Text>
+          </IndexTable.Cell>
+          <IndexTable.Cell>{description}</IndexTable.Cell>
+          <IndexTable.Cell>
+            <Text as="span" numeric>
+              {price} đ
+            </Text>
+          </IndexTable.Cell>
+          <IndexTable.Cell>
+            <Badge tone={fomattedStatusTone}>{fomattedStatus}</Badge>
+          </IndexTable.Cell>
+          <IndexTable.Cell>
+            <ButtonGroup>
+              <Button
+                tone="success"
+                url={`/app/product/${paramId}`}
+                icon={EditIcon}
+                onClick={() => shopify.loading(true)}
+              />
+              <Button
+                tone="critical"
+                icon={DeleteIcon}
+                onClick={() => setModalActive(true)}
+              />
+            </ButtonGroup>
+          </IndexTable.Cell>
+        </IndexTable.Row>
+      );
+    },
   );
 
+  const debouncedTitle = useDebounce(filterSearch.title);
+  const debouncedCategory = useDebounce(filterSearch.searchCategory);
   useEffect(() => {
-    const handler = setTimeout(() => {
-      updateParam("title", filterSearch.title.trim());
-      updateParam("searchCategory", filterSearch.searchCategory.trim());
-    }, 500);
-    return () => clearTimeout(handler);
-  }, [filterSearch.title, filterSearch.searchCategory]);
-
-  useEffect(() => {
+    updateParam("title", debouncedTitle.trim());
+    updateParam("searchCategory", debouncedCategory.trim());
     updateParam("status", filterSearch.status[0]);
     updateParam("category", filterSearch.category[0]?.split("/").pop());
-  }, [filterSearch.status, filterSearch.category]);
+  }, [
+    debouncedTitle,
+    debouncedCategory,
+    filterSearch.status,
+    filterSearch.category,
+  ]);
 
   useEffect(() => {
     if (fetcher.state !== "idle" || navigation.state === "loading") {
@@ -372,30 +353,34 @@ export default function Index() {
     } else {
       shopify.loading(false);
     }
-
     if (fetcher.state === "loading") shopify.toast.show(fetcher.data as string);
   }, [fetcher.state, navigation.state]);
+
+  const argOfPage = {
+    title: "Product List",
+    primaryAction: (
+      <Button
+        url="/app/product/new"
+        variant="primary"
+        loading={loading.loadingButtonAdd}
+        onClick={() => {
+          setLoading((prev) => ({
+            ...prev,
+            acceptLoading: false,
+            loadingButtonAdd: true,
+          }));
+        }}
+      >
+        New Product
+      </Button>
+    ),
+  };
 
   return (
     <Page
       fullWidth
-      title="Product List"
-      primaryAction={
-        <Button
-          url="/app/product/new"
-          variant="primary"
-          loading={loading.loadingButtonAdd}
-          onClick={() => {
-            setLoading((prev) => ({
-              ...prev,
-              acceptLoading: false,
-              loadingButtonAdd: true,
-            }));
-          }}
-        >
-          New Product
-        </Button>
-      }
+      title={argOfPage.title}
+      primaryAction={argOfPage.primaryAction}
     >
       <Card padding={"0"}>
         <IndexFilters
@@ -406,8 +391,8 @@ export default function Index() {
             setFilterSearch((prev) => ({ ...prev, title: "" }))
           }
           tabs={[]}
-          selected={selected}
-          onSelect={setSelected}
+          selected={0}
+          onSelect={() => {}}
           filters={filters}
           appliedFilters={appliedFilters}
           onClearAll={handleFiltersClearAll}
@@ -431,18 +416,15 @@ export default function Index() {
             { title: "status" },
             { title: "Actions" },
           ]}
+          pagination={{
+            hasNext: products.pageInfo.hasNextPage,
+            hasPrevious: products.pageInfo.hasPreviousPage,
+            onNext: HandlePaginationNext,
+            onPrevious: HandlePaginationPrev,
+          }}
         >
           {rowMarkup}
         </IndexTable>
-
-        <Pagination
-          onPrevious={HandlePaginationPrev}
-          onNext={HandlePaginationNext}
-          type="table"
-          hasNext={products.pageInfo.pageHasNextAndPervious.hasNextPage}
-          hasPrevious={products.pageInfo.pageHasNextAndPervious.hasPreviousPage}
-        />
-
         <ModalCustom
           modalActive={modalActive}
           handleCancle={handleCancel}

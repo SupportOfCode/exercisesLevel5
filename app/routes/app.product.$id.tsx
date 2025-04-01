@@ -1,10 +1,9 @@
-import { ActionFunction, LoaderFunction, redirect } from "@remix-run/node";
+import { ActionFunction, LoaderFunction } from "@remix-run/node";
 import {
   useFetcher,
   useLoaderData,
   useNavigate,
   useNavigation,
-  useSearchParams,
 } from "@remix-run/react";
 import {
   Page,
@@ -13,17 +12,19 @@ import {
   Card,
   Button,
   FormLayout,
-  Banner,
-  Box,
-  Toast,
-  Frame,
   Autocomplete,
   Icon,
 } from "@shopify/polaris";
 import { SearchIcon } from "@shopify/polaris-icons";
-import { useCheckNavigation, validateData } from "app/common";
+import {
+  formmatedCategoriesByLabel,
+  productData,
+  validateData,
+} from "app/common";
 import ModalCustom from "app/components/Modal";
 import { productInit, status } from "app/constants";
+import { useDebounce } from "app/hooks/useDebounce";
+import { useUpdateParams } from "app/hooks/useUpdateParams";
 import { authenticate } from "app/shopify.server";
 import { useProductStore } from "app/store";
 import {
@@ -36,31 +37,29 @@ import {
   ProductVariantsCreate,
   UpdateProduct,
 } from "app/utils/product.server";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 export const loader: LoaderFunction = async ({ request, params }) => {
   const { admin } = await authenticate.admin(request);
   const url = new URL(request.url);
   const categorySearch = url.searchParams.get("categorySearch");
-
   // query data
-  const responseCategory = await admin.graphql(
-    getCategory(categorySearch ?? ""),
-  );
-  const responseProduct = await admin.graphql(getProduct(), {
-    variables: {
-      ownerId: `gid://shopify/Product/${params.id}`,
-    },
-  });
+  const [responseCategory, responseProduct] = await Promise.all([
+    admin.graphql(getCategory(categorySearch ?? "")),
+    admin.graphql(getProduct(), {
+      variables: {
+        ownerId: `gid://shopify/Product/${params.id}`,
+      },
+    }),
+  ]);
 
   // convert data
-  const dataCategory = await responseCategory.json();
-  const dataOfProduct = await responseProduct.json();
-  const categoryList = dataCategory.data.taxonomy.categories.edges.map(
-    (item: { node: { id: string; name: string } }) => ({
-      value: item.node.id,
-      label: item.node.name,
-    }),
+  const [dataOfCategory, dataOfProduct] = await Promise.all([
+    responseCategory.json(),
+    responseProduct.json(),
+  ]);
+  const categoryList = dataOfCategory.data.taxonomy.categories.edges.map(
+    (item: nodeCategory) => formmatedCategoriesByLabel(item),
   );
 
   // return data
@@ -71,20 +70,7 @@ export const loader: LoaderFunction = async ({ request, params }) => {
       category: categoryList,
     };
   return {
-    data: {
-      ...productInit,
-      title: dataOfProduct.data.product?.title,
-      description: dataOfProduct.data.product?.description,
-      status: dataOfProduct.data.product?.status,
-      price: dataOfProduct.data.product?.variants.edges[0].node.price,
-      inventory:
-        dataOfProduct.data.product?.variants.edges[0].node.inventoryQuantity.toString(),
-      categoryId: dataOfProduct.data.product?.category.id,
-      categoryName: dataOfProduct.data.product.category.name,
-      variantId: dataOfProduct.data.product?.variants.edges[0].node.id,
-      inventoryItemId:
-        dataOfProduct.data.product.variants.edges[0].node.inventoryItem.id,
-    },
+    data: productData(dataOfProduct as ProductResponse),
     category: categoryList,
     page: "edit",
   };
@@ -129,7 +115,6 @@ export const action: ActionFunction = async ({ request, params }) => {
         ],
       },
     });
-    // return redirect(`/app/product/${argOfProduct.idProduct.split("/").pop()}`);
     return {
       id: argOfProduct.idProduct.split("/").pop(),
       title: "created success",
@@ -177,11 +162,13 @@ export const action: ActionFunction = async ({ request, params }) => {
       }),
     ]);
     return {
-      title: "update successed",
+      title: "updated success",
     };
   } else if (request.method === "DELETE") {
     await admin.graphql(productDelete(`gid://shopify/Product/${params.id}`));
-    return redirect("/app");
+    return {
+      title: "deleted success",
+    };
   }
 };
 
@@ -190,18 +177,19 @@ export default function Product() {
   const productOld = useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const { product, setProduct, editProduct, resetProduct } = useProductStore();
-  const [searchParams, setSearchParams] = useSearchParams();
   const navigation = useNavigation();
-  // custom hook
-  const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
   const [modalActive, setModalActive] = useState(false);
   const [loadingButton, setLoaddingButton] = useState({
     submitLoading: false,
     deleteLoading: false,
   });
+  // custom hook
+  const updateParams = useUpdateParams();
 
   useEffect(() => {
-    if ((fetcher.data as { title: string })?.title === "update success")
+    if ((fetcher.data as { title: string })?.title === "updated success")
+      navigate("/app");
+    if ((fetcher.data as { title: string })?.title === "deleted success")
       navigate("/app");
     if ((fetcher.data as { title: string })?.title === "created success")
       navigate(`/app/product/${(fetcher.data as { id: string })?.id}`);
@@ -218,7 +206,6 @@ export default function Product() {
     const defaultValueCategory = !product.categoryId.trim()
       ? (productOld.category[0]?.value ?? "")
       : product.categoryId;
-
     editProduct("categoryId", defaultValueCategory);
   }, [productOld.category]);
 
@@ -230,28 +217,10 @@ export default function Product() {
     Object.keys(productOld.data).filter((key) => key !== "categoryId"),
   );
 
+  const debouncedCategoryName = useDebounce(product.categoryName);
   useEffect(() => {
-    const handler = setTimeout(() => {
-      const params = new URLSearchParams(searchParams);
-      let hasChanged = false;
-
-      const updateParam = (key: string, value?: string) => {
-        if (value && value !== params.get(key)) {
-          params.set(key, value);
-          hasChanged = true;
-        } else if (!value && params.has(key)) {
-          params.delete(key);
-          hasChanged = true;
-        }
-      };
-      updateParam("categorySearch", product.categoryName.trim() || undefined);
-      if (hasChanged) {
-        setSearchParams(params);
-      }
-    }, 500);
-
-    return () => clearTimeout(handler);
-  }, [product.categoryName, searchParams]);
+    updateParams("categorySearch", debouncedCategoryName);
+  }, [debouncedCategoryName]);
 
   const handleChange =
     <Key extends keyof ProductType>(field: Key) =>
@@ -267,7 +236,7 @@ export default function Product() {
       title: product.title,
       description: product.description,
       status: product.status,
-      inventory: product.inventory,
+      inventory: +product.inventory - productOld.data.inventory,
       price: product.price,
       category: product.categoryId,
       variant: product.variantId,
@@ -281,19 +250,9 @@ export default function Product() {
 
   const handleDelete = () => {
     const formData = new FormData();
-    setLoaddingButton((prev) => ({ ...prev, contentToast: "deleted success" }));
     fetcher.submit(formData, { method: "delete" });
     setModalActive(false);
   };
-
-  // const toastMarkup = loadingButton.showToast ? (
-  //   <Toast
-  //     content={loadingButton.contentToast}
-  //     onDismiss={() =>
-  //       setLoaddingButton((prev) => ({ ...prev, showToast: false }))
-  //     }
-  //   />
-  // ) : null;
 
   const updateSelection = (selected: string[]) => {
     const selectedValue = selected.map((selectedItem) => {
@@ -304,8 +263,6 @@ export default function Product() {
       );
       return matchedOption && matchedOption.label;
     });
-
-    setSelectedOptions(selected);
     editProduct("categoryId", selected[0]);
     editProduct("categoryName", selectedValue[0]);
   };
@@ -319,47 +276,60 @@ export default function Product() {
       prefix={<Icon source={SearchIcon} tone="base" />}
       placeholder="Search category ..."
       autoComplete="off"
+      loading={navigation.state === "loading" && fetcher.state === "idle"}
     />
   );
 
-  return (
-    <Page
-      title={productOld.page === "new" ? "Add Product" : product.title}
-      backAction={{
-        onAction: () => {
-          shopify.loading(true);
-          navigate("/app");
-        },
-      }}
-      primaryAction={
+  const argOfPage = {
+    title: productOld.page === "new" ? "Add Product" : product.title,
+    backAction: {
+      onAction: () => {
+        shopify.loading(true);
+        navigate("/app");
+      },
+    },
+    primaryAction: (
+      <Button
+        loading={fetcher.state !== "idle" && loadingButton.submitLoading}
+        variant="primary"
+        onClick={() => {
+          handleSubmit();
+          setLoaddingButton(() => ({
+            submitLoading: true,
+            deleteLoading: false,
+          }));
+        }}
+      >
+        Save
+      </Button>
+    ),
+    secondaryActions:
+      productOld.page === "edit" ? (
         <Button
-          loading={fetcher.state !== "idle" && loadingButton.submitLoading}
-          variant="primary"
+          loading={fetcher.state !== "idle" && loadingButton.deleteLoading}
+          variant="secondary"
+          tone="critical"
           onClick={() => {
-            handleSubmit();
-            setLoaddingButton((prev) => ({ ...prev, submitLoading: true }));
+            setLoaddingButton(() => ({
+              deleteLoading: true,
+              submitLoading: false,
+            }));
+            setModalActive(true);
           }}
         >
-          Save
+          Delete
         </Button>
-      }
-      secondaryActions={
-        productOld.page === "edit" ? (
-          <Button
-            loading={fetcher.state !== "idle" && loadingButton.deleteLoading}
-            variant="secondary"
-            tone="critical"
-            onClick={() => {
-              setLoaddingButton((prev) => ({ ...prev, deleteLoading: true }));
-              setModalActive(true);
-            }}
-          >
-            Delete
-          </Button>
-        ) : (
-          []
-        )
-      }
+      ) : (
+        []
+      ),
+  };
+
+  return (
+    <Page
+      title={argOfPage.title}
+      backAction={argOfPage.backAction}
+      primaryAction={argOfPage.primaryAction}
+      secondaryActions={argOfPage.secondaryActions}
     >
       <Card background="bg-surface" padding="600">
         <FormLayout>
@@ -393,7 +363,6 @@ export default function Product() {
               maxLength={20}
             />
           </FormLayout.Group>
-
           <TextField
             label="Description"
             name="description"
@@ -416,13 +385,12 @@ export default function Product() {
             />
             <Autocomplete
               options={productOld.category}
-              selected={selectedOptions}
+              selected={[product.categoryId]}
               onSelect={updateSelection}
               textField={textField}
             />
           </FormLayout.Group>
         </FormLayout>
-        {/* {toastMarkup} */}
         <ModalCustom
           modalActive={modalActive}
           handleCancle={() => {

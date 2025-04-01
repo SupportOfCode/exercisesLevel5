@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "435b83ed21c69ac8492ca08e142ace67"
-application_url = "https://handmade-goes-websites-string.trycloudflare.com"
+application_url = "https://killer-hl-years-quilt.trycloudflare.com"
 embedded = true
 name = "forth-app"
 handle = "forth-app-1"
@@ -27,9 +27,9 @@ scopes = "write_products, read_locations, write_locations, write_inventory"
 
 [auth]
 redirect_urls = [
-  "https://handmade-goes-websites-string.trycloudflare.com/auth/callback",
-  "https://handmade-goes-websites-string.trycloudflare.com/auth/shopify/callback",
-  "https://handmade-goes-websites-string.trycloudflare.com/api/auth/callback"
+  "https://killer-hl-years-quilt.trycloudflare.com/auth/callback",
+  "https://killer-hl-years-quilt.trycloudflare.com/auth/shopify/callback",
+  "https://killer-hl-years-quilt.trycloudflare.com/api/auth/callback"
 ]
 
 [pos]

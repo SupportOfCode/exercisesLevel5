@@ -13,7 +13,6 @@ export const productInit: ProductType = {
   categoryName: "",
   variantId: "",
   inventoryItemId: "",
-  categorySearch: "",
   error: {
     title: "",
     inventory: "",

@@ -153,11 +153,12 @@ export function queryProduct(
           }  
           }
       }
-      cursor
       }
       pageInfo {
-        hasNextPage
-        hasPreviousPage
+         hasNextPage
+          hasPreviousPage
+          endCursor
+          startCursor
       }
       }
     }`;

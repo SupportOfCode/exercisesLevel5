@@ -1,5 +1,6 @@
 import { useLocation } from "@remix-run/react";
 import { useEffect, useRef, useState } from "react";
+import { productInit } from "./constants";
 
 export function formmatedData(result: ProductsResponse) {
   const products = result.data.products.edges.map(({ node }) => ({
@@ -10,7 +11,6 @@ export function formmatedData(result: ProductsResponse) {
     price: node?.variants?.edges[0]?.node.price || "N/A",
     inventory: node?.variants?.edges[0]?.node.inventoryQuantity ?? 0,
   }));
-
   return products;
 }
 
@@ -69,3 +69,30 @@ export function formmatedCategory(item: nodeCategory) {
     name: item.node.name,
   };
 }
+
+export function formmatedCategoriesByLabel(item: nodeCategory) {
+  return {
+    value: item.node.id,
+    label: item.node.name,
+  };
+}
+
+export const productData = (dataOfProduct: ProductResponse) => {
+  return {
+    ...productInit,
+    title: dataOfProduct.data.product?.title,
+    description: dataOfProduct.data.product?.description,
+    status: dataOfProduct.data.product?.status,
+    price: dataOfProduct.data.product?.variants.edges[0].node.price,
+    inventory:
+      dataOfProduct.data.product?.variants.edges[0].node.inventoryQuantity.toString(),
+    categoryId: dataOfProduct.data.product?.category.id,
+    categoryName: dataOfProduct.data.product?.category.name,
+    variantId: dataOfProduct.data.product?.variants.edges[0].node.id,
+    inventoryItemId:
+      dataOfProduct.data.product?.variants.edges[0].node.inventoryItem.id,
+  };
+};
+
+export const capitalize = (str: string): string =>
+  str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();

@@ -3,15 +3,42 @@ interface ProductsResponse {
     products: {
       edges: {
         node: ProductNode;
-        cursor: string;
       }[];
       pageInfo: {
         hasNextPage: boolean;
         hasPreviousPage: boolean;
+        endCursor: string;
+        startCursor: string;
       };
     };
   };
 }
+
+type ProductResponse = {
+  data: {
+    product: {
+      title: string;
+      description: string;
+      status: string;
+      category: {
+        id: string;
+        name: string;
+      };
+      variants: {
+        edges: {
+          node: {
+            id: string;
+            price: string;
+            inventoryQuantity: number;
+            inventoryItem: {
+              id: string;
+            };
+          };
+        }[];
+      };
+    };
+  };
+};
 
 interface ProductNode {
   id?: string;
@@ -51,7 +78,6 @@ type ProductType = Omit<FormattedProduct, "id" | "category"> & {
   categoryName: string;
   variantId: string;
   inventoryItemId: string;
-  categorySearch: string;
   error: ErrorType;
 };
 
