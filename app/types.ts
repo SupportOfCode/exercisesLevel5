@@ -93,3 +93,17 @@ type nodeCategory = {
     name: string;
   };
 };
+
+type argOfProduct = {
+  data: FormattedProduct[];
+  category: {
+    label: string;
+    value: string;
+  }[];
+  pageInfo: {
+    hasNextPage: boolean;
+    hasPreviousPage: boolean;
+    endCursor: string;
+    startCursor: string;
+  };
+};

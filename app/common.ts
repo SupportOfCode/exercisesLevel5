@@ -29,6 +29,11 @@ export const validateData = (
     isValid = false;
   }
 
+  if (+product.inventory < 0) {
+    newErrors.inventory = "Inventory is Invalid";
+    isValid = false;
+  }
+
   if (+product.price < 0) {
     newErrors.price = "Price is Invalid";
     isValid = false;

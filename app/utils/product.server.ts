@@ -195,3 +195,25 @@ export function productDelete(id: string) {
         }`;
   return data;
 }
+
+export function getCurrentcyCode() {
+  const data = `#graphql
+        query {
+          shop {
+            currencyCode
+          }
+        }`;
+  return data;
+}
+
+export const queryLocation = `#graphql
+     query {
+  locations(first: 10) {
+    edges {
+      node {
+        id
+      }
+    }
+  }
+}
+`;

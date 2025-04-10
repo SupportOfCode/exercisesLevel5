@@ -1,38 +1,25 @@
-import { Modal } from "@shopify/polaris";
+import { Modal, TitleBar } from "@shopify/app-bridge-react";
 
-interface ModalCustomProps {
-  modalActive: boolean;
+interface argOfModal {
+  text: {
+    titleModal: string;
+    titleMain: string;
+    titleAction: string;
+  };
   handleCancle: () => void;
-  numberOfProduct: number;
-  handleDelete: () => void;
+  handleMain: () => void;
 }
 
-export default function ModalCustom({
-  modalActive,
-  handleCancle,
-  numberOfProduct,
-  handleDelete,
-}: ModalCustomProps) {
+export function ModalCustom({ text, handleCancle, handleMain }: argOfModal) {
   return (
-    <Modal
-      open={modalActive}
-      onClose={handleCancle}
-      title={`Are you sure you want to delete ${numberOfProduct} products?`}
-      primaryAction={{
-        content: "Delete",
-        destructive: true,
-        onAction: handleDelete,
-      }}
-      secondaryActions={[
-        {
-          content: "Cancel",
-          onAction: handleCancle,
-        },
-      ]}
-    >
-      <Modal.Section>
-        <p>This action cannot be undone.</p>
-      </Modal.Section>
+    <Modal id="modal-custom">
+      <p style={{ margin: "12px" }}>{text.titleMain}</p>
+      <TitleBar title={text.titleModal}>
+        <button onClick={handleMain} tone={"default"} variant="primary">
+          {text.titleAction}
+        </button>
+        <button onClick={handleCancle}>Cancel</button>
+      </TitleBar>
     </Modal>
   );
 }

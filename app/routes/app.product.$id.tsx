@@ -5,6 +5,7 @@ import {
   useNavigate,
   useNavigation,
 } from "@remix-run/react";
+import { SaveBar } from "@shopify/app-bridge-react";
 import {
   Page,
   TextField,
@@ -21,7 +22,7 @@ import {
   productData,
   validateData,
 } from "app/common";
-import ModalCustom from "app/components/Modal";
+import { ModalCustom } from "app/components/Modal";
 import { productInit, status } from "app/constants";
 import { useDebounce } from "app/hooks/useDebounce";
 import { useUpdateParams } from "app/hooks/useUpdateParams";
@@ -35,6 +36,7 @@ import {
   productDelete,
   productVariantsBulkUpdate,
   ProductVariantsCreate,
+  queryLocation,
   UpdateProduct,
 } from "app/utils/product.server";
 import { useEffect, useState } from "react";
@@ -43,37 +45,47 @@ export const loader: LoaderFunction = async ({ request, params }) => {
   const { admin } = await authenticate.admin(request);
   const url = new URL(request.url);
   const categorySearch = url.searchParams.get("categorySearch");
-  // query data
-  const [responseCategory, responseProduct] = await Promise.all([
-    admin.graphql(getCategory(categorySearch ?? "")),
-    admin.graphql(getProduct(), {
-      variables: {
-        ownerId: `gid://shopify/Product/${params.id}`,
-      },
-    }),
-  ]);
 
-  // convert data
-  const [dataOfCategory, dataOfProduct] = await Promise.all([
-    responseCategory.json(),
-    responseProduct.json(),
-  ]);
-  const categoryList = dataOfCategory.data.taxonomy.categories.edges.map(
-    (item: nodeCategory) => formmatedCategoriesByLabel(item),
-  );
+  try {
+    // query data
+    const [responseCategory, responseProduct] = await Promise.all([
+      admin.graphql(getCategory(categorySearch ?? "")),
+      admin.graphql(getProduct(), {
+        variables: {
+          ownerId: `gid://shopify/Product/${params.id}`,
+        },
+      }),
+    ]);
 
-  // return data
-  if (params.id === "new")
+    // convert data
+    const [dataOfCategory, dataOfProduct] = await Promise.all([
+      responseCategory.json(),
+      responseProduct.json(),
+    ]);
+
+    if (!dataOfCategory) throw new Error("Failed to fetch categories.");
+    if (!dataOfProduct) throw new Error("Failed to fetch product data.");
+
+    const categoryList = dataOfCategory.data.taxonomy.categories.edges.map(
+      (item: nodeCategory) => formmatedCategoriesByLabel(item),
+    );
+
+    // return data
+    if (params.id === "new")
+      return {
+        data: productInit,
+        page: "new",
+        category: categoryList,
+      };
     return {
-      data: productInit,
-      page: "new",
+      data: productData(dataOfProduct as ProductResponse),
       category: categoryList,
+      page: "edit",
     };
-  return {
-    data: productData(dataOfProduct as ProductResponse),
-    category: categoryList,
-    page: "edit",
-  };
+  } catch (error) {
+    console.error("Loader Error:", error);
+    throw new Response("Internal Server Error");
+  }
 };
 
 export const action: ActionFunction = async ({ request, params }) => {
@@ -86,89 +98,122 @@ export const action: ActionFunction = async ({ request, params }) => {
       : data.category
     : "";
 
+  const responseLocations = await admin.graphql(queryLocation);
+  const dataOfLocation = await responseLocations.json();
+  const idsOfLocation = dataOfLocation?.data.locations.edges.map(
+    (edge: { node: { id: string } }) => edge.node.id,
+  );
+
   if (request.method === "POST") {
-    const responseProduct = await admin.graphql(
-      createProduct(data.title, data.description, data.status, paramCategory),
-    );
-    const dataOfProduct = await responseProduct.json();
-    const argOfProduct = {
-      idProduct: dataOfProduct.data.productCreate.product.id,
-      idOption: dataOfProduct.data.productCreate.product.options[0].id,
-      nameOption: dataOfProduct.data.productCreate.product.options[0].name,
-    };
+    try {
+      const responseProduct = await admin.graphql(
+        createProduct(data.title, data.description, data.status, paramCategory),
+      );
+      if (!responseProduct) throw new Error("Failed to create product.");
+      const dataOfProduct = await responseProduct.json();
+      const argOfProduct = {
+        idProduct: dataOfProduct.data.productCreate.product.id,
+        idOption: dataOfProduct.data.productCreate.product.options[0].id,
+        nameOption: dataOfProduct.data.productCreate.product.options[0].name,
+      };
 
-    await admin.graphql(ProductVariantsCreate(), {
-      variables: {
-        productId: argOfProduct.idProduct,
-        variants: [
-          {
-            inventoryQuantities: {
-              locationId: "gid://shopify/Location/104149254454",
-              availableQuantity: +data.inventory,
+      await Promise.all(
+        idsOfLocation.map((id: string) =>
+          admin.graphql(ProductVariantsCreate(), {
+            variables: {
+              productId: argOfProduct.idProduct,
+              variants: [
+                {
+                  inventoryQuantities: {
+                    locationId: id,
+                    availableQuantity: +data.inventory,
+                  },
+                  price: +data.price,
+                  optionValues: {
+                    optionId: argOfProduct.idOption,
+                    name: argOfProduct.nameOption,
+                  },
+                },
+              ],
             },
-            price: +data.price,
-            optionValues: {
-              optionId: argOfProduct.idOption,
-              name: argOfProduct.nameOption,
+          }),
+        ),
+      );
+
+      return {
+        id: argOfProduct.idProduct.split("/").pop(),
+        title: "created success",
+      };
+    } catch (error) {
+      console.error("Action Error:", error);
+      throw new Response("Internal Server Error");
+    }
+  }
+
+  if (request.method === "PUT") {
+    try {
+      await Promise.all([
+        admin.graphql(UpdateProduct(), {
+          variables: {
+            input: {
+              id: `gid://shopify/Product/${params.id}`,
+              title: data.title,
+              descriptionHtml: data.description,
+              status: data.status,
+              category: data.category,
             },
           },
-        ],
-      },
-    });
-    return {
-      id: argOfProduct.idProduct.split("/").pop(),
-      title: "created success",
-    };
-  } else if (request.method === "PUT") {
-    await Promise.all([
-      admin.graphql(UpdateProduct(), {
-        variables: {
-          input: {
-            id: `gid://shopify/Product/${params.id}`,
-            title: data.title,
-            descriptionHtml: data.description,
-            status: data.status,
-            category: data.category,
-          },
-        },
-      }),
+        }),
 
-      admin.graphql(productVariantsBulkUpdate(), {
-        variables: {
-          productId: `gid://shopify/Product/${params.id}`,
-          variants: [
-            {
-              id: data.variant,
-              price: +data.price,
-            },
-          ],
-        },
-      }),
-
-      admin.graphql(inventoryAdjustQuantities(), {
-        variables: {
-          input: {
-            reason: "correction",
-            name: "available",
-            changes: [
+        admin.graphql(productVariantsBulkUpdate(), {
+          variables: {
+            productId: `gid://shopify/Product/${params.id}`,
+            variants: [
               {
-                delta: +data.inventory,
-                inventoryItemId: data.inventoryId,
-                locationId: "gid://shopify/Location/104149254454",
+                id: data.variant,
+                price: +data.price,
               },
             ],
           },
-        },
-      }),
-    ]);
-    return {
-      title: "updated success",
-    };
-  } else if (request.method === "DELETE") {
-    await admin.graphql(productDelete(`gid://shopify/Product/${params.id}`));
-    return {
-      title: "deleted success",
-    };
+        }),
+
+        idsOfLocation.map((id: string) =>
+          admin.graphql(inventoryAdjustQuantities(), {
+            variables: {
+              input: {
+                reason: "correction",
+                name: "available",
+                changes: [
+                  {
+                    delta: +data.inventory,
+                    inventoryItemId: data.inventoryId,
+                    locationId: id,
+                  },
+                ],
+              },
+            },
+          }),
+        ),
+      ]);
+      return {
+        title: "updated success",
+      };
+    } catch (error) {
+      console.error("Action Error:", error);
+      throw new Response("Something went wrong");
+    }
+  }
+
+  if (request.method === "DELETE") {
+    try {
+      await admin.graphql(productDelete(`gid://shopify/Product/${params.id}`));
+      return {
+        title: "deleted success",
+      };
+    } catch (error) {
+      console.error("Action Error:", error);
+      throw new Response("Something went wrong");
+    }
   }
 };
 
@@ -176,13 +221,15 @@ export default function Product() {
   const fetcher = useFetcher();
   const productOld = useLoaderData<typeof loader>();
   const navigate = useNavigate();
-  const { product, setProduct, editProduct, resetProduct } = useProductStore();
+  const { product, setProduct, editProduct, resetProduct, currentcyCode } =
+    useProductStore();
   const navigation = useNavigation();
-  const [modalActive, setModalActive] = useState(false);
   const [loadingButton, setLoaddingButton] = useState({
     submitLoading: false,
     deleteLoading: false,
+    acceptLoading: false,
   });
+  const [acceptNavigate, setAcceptNavigate] = useState(true);
   // custom hook
   const updateParams = useUpdateParams();
 
@@ -196,8 +243,8 @@ export default function Product() {
   }, [fetcher.data]);
 
   useEffect(() => {
-    if (fetcher.state === "idle" || navigation.state !== "loading")
-      shopify.loading(false);
+    if (navigation.state !== "loading") shopify.loading(false);
+    if (navigation.state === "loading") shopify.loading(true);
     if (fetcher.state === "loading")
       shopify.toast.show((fetcher.data as { title: string })?.title);
   }, [fetcher.state, navigation.state]);
@@ -218,8 +265,11 @@ export default function Product() {
   );
 
   const debouncedCategoryName = useDebounce(product.categoryName);
+  const [acceptSearchCategory, setAcceptSeachCategory] = useState(false);
+
   useEffect(() => {
-    updateParams("categorySearch", debouncedCategoryName);
+    if (productOld.page === "new" || acceptSearchCategory)
+      updateParams("categorySearch", debouncedCategoryName);
   }, [debouncedCategoryName]);
 
   const handleChange =
@@ -227,6 +277,11 @@ export default function Product() {
     (value: ProductType[Key] | any) => {
       editProduct(field, value);
       editProduct("error", { ...product.error, [field]: "" });
+      shopify.saveBar.show("save-bar-custom");
+      if (field === "categoryName") {
+        setAcceptSeachCategory(true);
+        setLoaddingButton((prev) => ({ ...prev, acceptLoading: true }));
+      }
     };
 
   const handleSubmit = () => {
@@ -246,12 +301,13 @@ export default function Product() {
     fetcher.submit(formData, {
       method: productOld.page === "new" ? "post" : "put",
     });
+    shopify.saveBar.hide("save-bar-custom");
   };
 
   const handleDelete = () => {
     const formData = new FormData();
     fetcher.submit(formData, { method: "delete" });
-    setModalActive(false);
+    shopify.modal.hide("modal-custom");
   };
 
   const updateSelection = (selected: string[]) => {
@@ -276,7 +332,11 @@ export default function Product() {
       prefix={<Icon source={SearchIcon} tone="base" />}
       placeholder="Search category ..."
       autoComplete="off"
-      loading={navigation.state === "loading" && fetcher.state === "idle"}
+      loading={
+        navigation.state === "loading" &&
+        fetcher.state === "idle" &&
+        loadingButton.acceptLoading
+      }
     />
   );
 
@@ -284,8 +344,7 @@ export default function Product() {
     title: productOld.page === "new" ? "Add Product" : product.title,
     backAction: {
       onAction: () => {
-        shopify.loading(true);
-        navigate("/app");
+        if (acceptNavigate) navigate("/app");
       },
     },
     primaryAction: (
@@ -295,6 +354,7 @@ export default function Product() {
         onClick={() => {
           handleSubmit();
           setLoaddingButton(() => ({
+            acceptLoading: false,
             submitLoading: true,
             deleteLoading: false,
           }));
@@ -306,15 +366,20 @@ export default function Product() {
     secondaryActions:
       productOld.page === "edit" ? (
         <Button
-          loading={fetcher.state !== "idle" && loadingButton.deleteLoading}
+          loading={
+            fetcher.state !== "idle" &&
+            loadingButton.deleteLoading &&
+            loadingButton.acceptLoading
+          }
           variant="secondary"
           tone="critical"
           onClick={() => {
             setLoaddingButton(() => ({
+              acceptLoading: false,
               deleteLoading: true,
               submitLoading: false,
             }));
-            setModalActive(true);
+            shopify.modal.show("modal-custom");
           }}
         >
           Delete
@@ -355,12 +420,13 @@ export default function Product() {
               label="Price"
               name="price"
               autoComplete="off"
-              suffix="đ"
+              suffix={currentcyCode}
               requiredIndicator
               value={product.price}
               onChange={handleChange("price")}
               error={product.error.price}
               maxLength={20}
+              min={0}
             />
           </FormLayout.Group>
           <TextField
@@ -382,6 +448,7 @@ export default function Product() {
               value={product.inventory}
               requiredIndicator
               error={product.error.inventory}
+              min={0}
             />
             <Autocomplete
               options={productOld.category}
@@ -392,13 +459,33 @@ export default function Product() {
           </FormLayout.Group>
         </FormLayout>
         <ModalCustom
-          modalActive={modalActive}
-          handleCancle={() => {
-            setModalActive(false);
+          text={{
+            titleModal: "Delete Products",
+            titleMain: `Are you want to delete this product`,
+            titleAction: "Delete",
           }}
-          numberOfProduct={1}
-          handleDelete={handleDelete}
+          handleCancle={() => shopify.modal.hide("modal-custom")}
+          handleMain={handleDelete}
         />
+        <SaveBar
+          id="save-bar-custom"
+          onShow={() => setAcceptNavigate(false)}
+          onHide={() => setAcceptNavigate(true)}
+        >
+          <button
+            variant="primary"
+            onClick={() => {
+              handleSubmit();
+              shopify.saveBar.hide("save-bar-custom");
+            }}
+          />
+          <button
+            onClick={() => {
+              shopify.saveBar.hide("save-bar-custom");
+              setProduct(productOld.data);
+            }}
+          />
+        </SaveBar>
       </Card>
     </Page>
   );
